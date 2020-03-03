@@ -173,13 +173,32 @@ func (f *Fs) ftpConnection() (*ftp.ServerConn, error) {
 		fs.Errorf(f, "Error while Dialing %s: %s", f.dialAddr, err)
 		return nil, errors.Wrap(err, "ftpConnection Dial")
 	}
-	err = c.Login(f.user, f.pass)
-	if err != nil {
-		_ = c.Quit()
-		fs.Errorf(f, "Error while Logging in into %s: %s", f.dialAddr, err)
-		return nil, errors.Wrap(err, "ftpConnection Login")
+	sleepTime := 10 * time.Millisecond
+	const maxTries = 10
+	const maxSleep = 1 * time.Second
+	for try := 1; try <= maxTries; try++ {
+		err = c.Login(f.user, f.pass)
+		if err != nil {
+			_ = c.Quit()
+			switch errX := err.(type) {
+			case *textproto.Error:
+				switch errX.Code {
+				case ftp.StatusNotAvailable:
+					fs.Errorf(f, "Error while Logging in into %s: trying again #%d/%d in %v: %v", f.dialAddr, try, maxTries, sleepTime, err)
+					time.Sleep(sleepTime)
+					sleepTime *= 2
+					if sleepTime > maxSleep {
+						sleepTime = maxSleep
+					}
+					continue
+				}
+			}
+			fs.Errorf(f, "Error while Logging in into %s: %v", f.dialAddr, err)
+			err = errors.Wrap(err, "ftpConnection Login")
+		}
+		break
 	}
-	return c, nil
+	return c, err
 }
 
 // Get an FTP connection from the pool, or open a new one
